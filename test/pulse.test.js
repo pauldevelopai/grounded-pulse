@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  defineDeck, deckForRespondent, validateAnswers, summarise, aggregate,
+  defineDeck, deckForRespondent, validateAnswers, summarise, consolidate, aggregate,
   createMemoryHost, openCycle, getCycle, submitCycle, governanceDeck,
 } from '../src/index.js';
 
@@ -169,4 +169,142 @@ test('aggregate refuses to report below the subject threshold', async () => {
 
 test('the engine refuses a host that does not meet the contract', async () => {
   await assert.rejects(() => getCycle({ host: {}, decks, token: 't' }), /host is missing/);
+});
+
+/* ── consolidate: every response for one subject, not just the last ──────── */
+
+// A newsroom is not one person. These cases are the reason consolidate exists:
+// writing a policy from whichever colleague answered last discards the rest and
+// discards the disagreements, which are the most useful part of the set.
+
+const r = (answers, submittedAt = '2026-09-08T10:00:00Z') => ({ answers, skipped: [], submittedAt });
+
+test('consolidate with nothing answered is an honest empty result', () => {
+  const out = consolidate(governanceDeck, []);
+  assert.equal(out.respondents, 0);
+  assert.equal(out.answered, 0);
+  assert.deepEqual(out.findings, []);
+  assert.equal(out.skipped.length, 12, 'every question should read as unanswered');
+});
+
+test('consolidate reads every respondent, not only the most recent', () => {
+  const out = consolidate(governanceDeck, [
+    r({ ai_uses: ['transcription'] }, '2026-09-01T00:00:00Z'),
+    r({ ai_uses: ['images'] },        '2026-09-08T00:00:00Z'),
+  ]);
+  assert.equal(out.respondents, 2);
+  const text = out.findings.map((f) => f.finding).join(' | ');
+  assert.match(text, /transcription/i, 'the earlier respondent was dropped');
+  assert.match(text, /images/i, 'the later respondent was dropped');
+});
+
+test('a multi-select union is the truth: what anyone reports, happens here', () => {
+  const out = consolidate(governanceDeck, [
+    r({ ai_uses: ['transcription', 'drafting'] }),
+    r({ ai_uses: ['drafting', 'images'] }),
+  ]);
+  const reported = out.findings.filter((f) => f.kind === 'reported');
+  assert.equal(reported.length, 3, 'transcription, drafting and images should all stand');
+  const drafting = reported.find((f) => /drafting/i.test(f.finding));
+  assert.equal(drafting.said, 2);
+  assert.equal(drafting.of, 2);
+  assert.equal(drafting.agreed, true);
+});
+
+test('a lone report is not promoted to house practice — the count travels with it', () => {
+  const out = consolidate(governanceDeck, [
+    r({ ai_uses: ['transcription'] }), r({ ai_uses: ['drafting'] }),
+    r({ ai_uses: ['drafting'] }),      r({ ai_uses: ['drafting'] }),
+  ]);
+  const lone = out.findings.find((f) => /transcription/i.test(f.finding));
+  assert.equal(lone.said, 1);
+  assert.equal(lone.of, 4);
+  assert.equal(lone.agreed, false);
+  assert.match(lone.why, /1 of 4/);
+});
+
+test('nobody able to answer is one weighted unknown, not one per person', () => {
+  const out = consolidate(governanceDeck, [
+    r({ source_details: 'unknown' }), r({ source_details: 'unknown' }), r({ source_details: 'unknown' }),
+  ]);
+  const u = out.findings.filter((f) => f.kind === 'unknown');
+  assert.equal(u.length, 1);
+  assert.equal(u[0].said, 3);
+  assert.equal(u[0].of, 3);
+  assert.match(u[0].why, /3 people/);
+  assert.equal(out.unknowns.length, 1);
+});
+
+test('THE BLIND SPOT: some report the practice, others cannot see it', () => {
+  // The editor says nobody uses AI; two reporters list tools. The practice is
+  // real and unevenly known — a different problem from either doing it or not
+  // knowing about it, and the one a policy has to close.
+  const out = consolidate(governanceDeck, [
+    r({ ai_uses: ['none'] }),
+    r({ ai_uses: ['transcription'] }),
+    r({ ai_uses: ['drafting'] }),
+  ]);
+  const blind = out.conflicts.find((c) => c.kind === 'blind_spot');
+  assert.ok(blind, 'a blind spot should have been found');
+  assert.equal(blind.said, 1);
+  assert.equal(blind.of, 3);
+  assert.equal(blind.agreed, false);
+  assert.match(blind.finding, /1 of 3/);
+  assert.match(blind.why, /owner/i, 'it must ask for a rule and an owner');
+  // And it must not be swallowed: the reports still stand alongside it.
+  assert.ok(out.findings.some((f) => f.kind === 'reported' && /transcription/i.test(f.finding)));
+});
+
+test('two accounts of the same arrangement is a conflict, not a majority vote', () => {
+  const out = consolidate(governanceDeck, [
+    r({ who_decides: 'editor' }), r({ who_decides: 'nobody' }), r({ who_decides: 'nobody' }),
+  ]);
+  const c = out.conflicts.find((x) => x.kind === 'conflict');
+  assert.ok(c, 'a conflict should have been found');
+  assert.match(c.finding, /do not agree/i);
+  assert.match(c.finding, /2 said "Nobody decides"/);
+  assert.match(c.finding, /1 said "An editor"/);
+  assert.equal(c.agreed, false);
+  // Both accounts survive as findings; the engine does not pick a winner.
+  const reported = out.findings.filter((f) => f.kind === 'reported' && f.question === 'who_decides');
+  assert.equal(reported.length, 2);
+});
+
+test('agreement is not reported as a conflict', () => {
+  const out = consolidate(governanceDeck, [
+    r({ who_decides: 'editor' }), r({ who_decides: 'editor' }),
+  ]);
+  assert.deepEqual(out.conflicts, []);
+  const f = out.findings.find((x) => x.question === 'who_decides');
+  assert.equal(f.agreed, true);
+  assert.equal(f.said, 2);
+});
+
+test('disagreements come first, so what needs deciding is read first', () => {
+  const out = consolidate(governanceDeck, [
+    r({ ai_uses: ['transcription'], who_decides: 'editor',  source_details: 'unknown' }),
+    r({ ai_uses: ['none'],          who_decides: 'nobody',  source_details: 'unknown' }),
+  ]);
+  const kinds = out.findings.map((f) => f.kind);
+  const firstReported = kinds.indexOf('reported');
+  for (const k of ['blind_spot', 'conflict']) {
+    const at = kinds.indexOf(k);
+    assert.ok(at > -1 && at < firstReported, `${k} should sort above plain reports`);
+  }
+});
+
+test('a question everyone left blank is skipped, never an unknown', () => {
+  const out = consolidate(governanceDeck, [r({ ai_uses: ['drafting'] }), r({ ai_uses: ['drafting'] })]);
+  assert.ok(out.skipped.some((s) => s.question === 'source_details'));
+  assert.ok(!out.unknowns.some((u) => u.question === 'source_details'));
+  assert.equal(out.answered, 1);
+  assert.equal(out.total, 12);
+});
+
+test('consolidate returns the same keys as summarise, so a consumer can swap', () => {
+  const one = summarise(governanceDeck, { ai_uses: ['drafting'] }, { skipped: [] });
+  const many = consolidate(governanceDeck, [r({ ai_uses: ['drafting'] })]);
+  for (const k of Object.keys(one)) assert.ok(k in many, `consolidate is missing ${k}`);
+  assert.equal(many.first_answered_at, '2026-09-08T10:00:00Z');
+  assert.equal(many.last_answered_at, '2026-09-08T10:00:00Z');
 });

@@ -28,7 +28,7 @@ and not a migration.
 This engine is the first half's interaction on the second half's delivery, with a real
 store — and it lives at GROUNDED level because governance is not its only consumer.
 
-## The two rules that shape the code
+## The three rules that shape the code
 
 **1. "Don't know" is a finding, not a gap.** In governance it is often the most useful
 answer in the deck. A newsroom that answers "don't know" to whether source details have
@@ -38,7 +38,20 @@ counted as "unanswered", and reported separately from a question that was simply
 `defineDeck` **refuses** a single-choice factual question that offers no way to say it —
 pass `requireUnknownOption: false` only when the question is a preference rather than a fact.
 
-**2. The engine owns the logic; the consumer owns the store.** `src/host.js` is the whole
+**2. Disagreement is a finding too, and a subject is not one person.** `summarise` reads
+ONE response; `consolidate` (v0.2.0) reads all of a subject's responses together, and it is
+the one a real consumer should call. Reading only the latest response is a bug, not a
+simplification: it silently discards everyone who answered earlier, and with them the
+disagreements. If the editor says nobody here uses AI and two reporters between them list
+six tools, that gap means the practice exists and is invisible to the person accountable for
+it — which needs a rule and an owner, not a description of current practice. So conflicts
+are never settled by majority: both accounts stand, the disagreement becomes its own
+finding, and every finding carries `said`/`of` counts so a lone report is not mistaken for
+house practice. Findings come back with `blind_spot` and `conflict` sorted above plain
+reports. **The tracker read `latestFindings` (one response, `LIMIT 1`) until 2026-09-08 —
+that is exactly the bug this rule exists to prevent.**
+
+**3. The engine owns the logic; the consumer owns the store.** `src/host.js` is the whole
 storage contract, and it is an argument. The engine never touches a database. This is the
 node runtime's arrangement (`host.store`, `host.db`) and it exists because an engine that
 owns its own tables can only be reused by services willing to adopt its tenancy — which is
@@ -52,11 +65,12 @@ limited the engine to one product.
 
 ```
 src/deck.js       question + deck shape, and the validation that keeps a deck honest
-src/answers.js    answer validation, the unknown-aware roll-up, k-anonymous aggregate
+src/answers.js    answer validation; summarise (one response), consolidate (all of one
+                  subject's, with conflicts), aggregate (many subjects, k-anonymous)
 src/host.js       the storage contract + createMemoryHost (also the spec a real host is written against)
 src/handlers.js   the HTTP face, as plain functions
 decks/governance.js  the first real deck — 12 questions, 4 per policy layer
-test/             node --test, 14 cases; `npm test`
+test/             node --test, 25 cases; `npm test`
 ```
 
 **No dependencies, and no Express.** Two kinds of consumer need these questions and they

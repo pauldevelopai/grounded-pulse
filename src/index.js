@@ -10,7 +10,7 @@
 // governance.
 
 export { defineDeck, deckForRespondent, findQuestion, QUESTION_KINDS, LAYERS } from './deck.js';
-export { validateAnswers, summarise, aggregate } from './answers.js';
+export { validateAnswers, summarise, consolidate, aggregate } from './answers.js';
 export { assertHost, createMemoryHost } from './host.js';
 export { openCycle, getCycle, submitCycle } from './handlers.js';
 export { governanceDeck } from '../decks/governance.js';

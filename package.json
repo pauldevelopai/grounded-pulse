@@ -1,6 +1,6 @@
 {
   "name": "@developai/grounded-pulse",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "The GROUNDED Pulse engine — ask a subject a short set of fixed-choice questions, keep the answers, turn them into findings. One tap per question, no typing. The engine owns the question shape, validation and roll-up; the consumer owns the storage and decides what a subject is. First deck: newsroom AI governance.",
   "type": "module",
